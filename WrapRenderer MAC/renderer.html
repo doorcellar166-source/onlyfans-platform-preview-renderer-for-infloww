@@ -1,0 +1,951 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Wrap Renderer</title>
+<!-- Roboto 400/700 normal+italic as data-URI woff2 (file:// pages can't load font files directly) -->
+<link rel="stylesheet" href="roboto.css">
+<style>
+/* ==========================================================================
+   Wrap Renderer UI. Wiring map for every function lives in ARCHITECTURE.md.
+   ========================================================================== */
+:root{
+  --bg:#0D1318; --panel:#141C23; --panel2:#1A242D; --line:#26323D; --tx:#E6EBEF; --mut:#8896A3;
+  --acc:#45ADED; --red:#FF3B3B; --cyan:#3BD1FF; --green:#4CE07A; --warn:#F5B942; --ok:#4CC38A;
+  --font: Roboto, sans-serif;  /* same as OnlyFans web: symbol fallback depends on this exact list, do not add fonts */
+  --ui: "Segoe UI", Roboto, system-ui, sans-serif;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--tx);font:13px/1.4 var(--ui)}
+body{display:flex;flex-direction:column}
+button,select,input{font:inherit;color:inherit}
+button{background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:5px 10px;cursor:pointer}
+button:hover{border-color:#3A4A58}
+button.on{background:#17344A;border-color:var(--acc);color:#CFEAFB}
+button:disabled{opacity:.45;cursor:not-allowed}
+select,input[type=number],input[type=text]{background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:4px 6px}
+input[type=number]{width:64px}
+kbd{font:11px/1 ui-monospace,Consolas,monospace;background:#0A0F13;border:1px solid var(--line);border-radius:4px;padding:2px 4px;color:var(--mut)}
+
+/* ---------- layout ---------- */
+#top{display:flex;align-items:center;gap:10px;padding:8px 14px;border-bottom:1px solid var(--line);background:var(--panel);flex-wrap:wrap}
+#top h1{font-size:14px;margin:0 8px 0 0;font-weight:600;letter-spacing:.2px}
+#top .sp{flex:1}
+#hostNote{color:var(--mut);font-size:12px}
+#hostNote.err{color:var(--warn)}
+.gbtn .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:0}
+#main{display:grid;grid-template-columns:minmax(360px,1fr) auto;grid-template-rows:minmax(0,1fr);gap:14px;padding:14px;flex:1;min-height:0;overflow:hidden}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;display:flex;flex-direction:column;min-height:0}
+.card>header{display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.card>header b{font-weight:600}
+.card>header .meta{color:var(--mut);font-size:12px}
+.card>header .sp{flex:1}
+
+/* ---------- editor ---------- */
+#tb{display:flex;gap:6px;flex-wrap:wrap;padding:8px 10px;border-bottom:1px solid var(--line)}
+.grp{display:flex;border:1px solid var(--line);border-radius:7px;overflow:hidden}
+.grp button{border:0;border-radius:0;border-right:1px solid var(--line);padding:5px 9px;background:var(--panel2)}
+.grp button:last-child{border-right:0}
+.grp button.on{background:#17344A;color:#CFEAFB}
+#edWrap{flex:1;overflow:auto;padding:14px 16px;background:#1C2832}
+#ed{outline:none;min-height:100%;white-space:pre-wrap;overflow-wrap:break-word;font-family:var(--font);font-size:16px;line-height:24px;color:#F6F7F8;caret-color:#fff;
+  --xs:12px;--sm:14px;--md:16px;--lg:24px;--xl:32px;--def:#F6F7F8;--grey:#8A96A3;--blue:#45ADED}
+#ed:empty::before{content:"Type or paste (Ctrl+V) a message. Formatting from Infloww/OF is kept.";color:#5D6B78}
+#edFoot{display:flex;gap:8px;align-items:center;padding:8px 10px;border-top:1px solid var(--line);flex-wrap:wrap}
+#edFoot .meta{color:var(--mut);font-size:12px}
+#toast{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);background:#0A0F13;border:1px solid var(--line);padding:8px 14px;border-radius:8px;opacity:0;transition:opacity .2s;pointer-events:none;z-index:50}
+#toast.show{opacity:1}
+
+/* shared text formatting (editor + previews). Sizes/colours come from CSS vars set per pane */
+.s-xs{font-size:var(--xs)} .s-sm{font-size:var(--sm)} .s-md{font-size:var(--md)} .s-lg{font-size:var(--lg)} .s-xl{font-size:var(--xl)}
+.c-def{color:var(--def)} .c-grey{color:var(--grey)} .c-blue{color:var(--blue)}
+.fb{font-weight:500} .fi{font-style:italic}  /* OnlyFans bold is Roboto Medium (500), not 700 */
+.txt span,#ed span{line-height:normal}
+
+/* ---------- previews ---------- */
+#pv{display:flex;gap:14px;min-height:0;overflow-x:auto;overflow-y:hidden;align-items:flex-start;padding-bottom:6px}
+/* Styling the scrollbar keeps it on screen: macOS otherwise hides it until you scroll */
+#pv::-webkit-scrollbar{height:12px}
+#pv::-webkit-scrollbar-track{background:var(--panel);border-radius:6px}
+#pv::-webkit-scrollbar-thumb{background:#3A4A58;border-radius:6px;border:2px solid var(--panel)}
+#pv::-webkit-scrollbar-thumb:hover{background:#4D6172}
+#pv .card{max-height:100%;flex:none}
+#pv .card[hidden]{display:none}
+.pvBody{overflow:auto;padding:16px;min-height:0;scrollbar-gutter:stable}
+.txtbox{position:relative}
+.txt{white-space:pre-wrap;overflow-wrap:break-word;font-family:var(--font);font-size:16px;line-height:24px}
+.ln{position:relative}
+.ln.diff{background:rgba(245,185,66,.16)}
+.ln.diff::after{content:attr(data-badge);position:absolute;top:2px;font:600 10px/16px var(--ui);color:#1A1200;background:var(--warn);border-radius:4px;padding:0 4px;white-space:nowrap}
+.gd{position:absolute;top:-6px;bottom:-6px;width:1px;pointer-events:none;z-index:2}
+.gd.c{background:repeating-linear-gradient(to bottom,currentColor 0 2px,transparent 2px 7px)}
+.gd:not(.c){background:currentColor}
+.noguides .gd{display:none}
+
+/* Infloww pane */
+#infCard .pvBody{background:#16202A}
+#infBubble{background:#1C2832;padding:18px;border-radius:8px;display:inline-block}
+#infTxt{--def:#F6F7F8;--grey:#8A96A3;--blue:#45ADED;color:var(--def)}
+#infBox .gd{color:var(--red)}
+#infTxt .ln.diff::after{right:calc(100% + 24px)}
+#infCard .pvBody{padding-left:56px}
+
+/* PC pane (OnlyFans web chat, dark). Colours sampled from a real screenshot: page #161618, bubble #242529. */
+#pcCard .pvBody{background:#161618;padding-left:56px}
+#pcBubble{background:#242529;padding:12px;border-radius:12px;display:inline-block}
+#pcTxt{--def:#F6F7F8;--grey:#8A96A3;--blue:#45ADED;color:var(--def)}
+#pcBox .gd{color:var(--green)}
+#pcTxt .ln.diff::after{right:calc(100% + 24px)}
+
+/* iPhone pane */
+#phone{border:10px solid #050708;border-radius:46px;overflow:hidden;background:var(--page);position:relative;box-shadow:0 0 0 1px #2A3540}
+#phone .bar{height:44px;display:flex;align-items:flex-end;justify-content:space-between;padding:0 26px 6px;font:600 14px var(--ui);color:var(--phoneTx)}
+#phone .chatHead{height:52px;border-bottom:1px solid var(--sep);display:flex;align-items:center;padding:0 16px;font:600 17px var(--font);color:var(--phoneTx)}
+#phoneScroll{padding:12px 0 28px}
+#mobBubble{background:var(--bubble);border-radius:12px;padding:12px;margin-left:15%}
+#mobTxt{color:var(--def)}
+/* iPhone symbol widths, measured from an iPhone 16 Pro screenshot: box/block characters are a full 1em.
+   Windows fallback fonts give 8-11px, so without this the phone pane wraps bracket lines too late. Toggled by applyPaneVars(). */
+@font-face{font-family:WRiOSBox;src:local("Yu Gothic"),local("Yu Gothic Regular"),local("YuGothic-Regular"),local("Hiragino Sans"),local("HiraginoSans-W3");unicode-range:U+2500-259F}
+/* Apple emoji are about 1.25em wide; Segoe UI Emoji is 1.373em. Not declared on Mac, where the real Apple font is used. */
+@font-face{font-family:WRiOSEmoji;src:local("Segoe UI Emoji");unicode-range:U+1F000-1FAFF;size-adjust:91%}
+@font-face{font-family:WRiOSEmojiLg;src:local("Segoe UI Emoji");unicode-range:U+1F000-1FAFF;size-adjust:80%}  /* at Large, emoji are about 1.1em on iPhone */
+.txt.ios{font-family:WRiOSBox,WRiOSEmoji,var(--font)}
+.txt.ios .s-lg{font-family:WRiOSBox,WRiOSEmojiLg,var(--font)}
+/* Android symbol widths, measured from a Chrome on Android screenshot: lines and blocks 11.34px, rounded corners about 10px,
+   U+2800 about 11.2px, emoji about 0.84x Segoe UI Emoji. Toggled by applyPaneVars(). */
+@font-face{font-family:WRAndLine;src:local("Arial");unicode-range:U+2500,U+2588}
+@font-face{font-family:WRAndCorner;src:local("Segoe UI Symbol");unicode-range:U+256D-2570;size-adjust:125%}
+@font-face{font-family:WRAndBlank;src:local("Segoe UI Symbol");unicode-range:U+2800;size-adjust:108%}
+@font-face{font-family:WRAndEmoji;src:local("Segoe UI Emoji");unicode-range:U+1F000-1FAFF;size-adjust:84%}
+.txt.android{font-family:WRAndLine,WRAndCorner,WRAndBlank,WRAndEmoji,var(--font)}
+#mobBox .gd{color:var(--cyan)}
+#mobTxt .ln.diff::after{right:calc(100% + 18px)}
+#phone.light{--page:#FFFFFF;--bubble:#F1F2F4;--def:#17181B;--grey:#8A96A3;--blue:#4DACEA;--phoneTx:#000;--sep:#E5E7EA}
+#phone.dark{--page:#0B0F13;--bubble:#1C2832;--def:#F6F7F8;--grey:#8A96A3;--blue:#45ADED;--phoneTx:#fff;--sep:#1F2A33}
+
+/* ---------- drawers ---------- */
+.drawer{position:fixed;top:0;right:0;width:min(560px,100%);height:100%;background:var(--panel);border-left:1px solid var(--line);transform:translateX(100%);transition:transform .2s;z-index:40;display:flex;flex-direction:column}
+.drawer.open{transform:none}
+.drawer>header{display:flex;align-items:center;padding:10px 14px;border-bottom:1px solid var(--line);gap:8px}
+.drawer>header b{flex:1;font-size:14px}
+.drawer .body{overflow:auto;padding:14px;flex:1}
+.drawer h3{font-size:12px;text-transform:uppercase;letter-spacing:.6px;color:var(--mut);margin:16px 0 8px}
+.drawer h3:first-child{margin-top:0}
+table.cal{border-collapse:collapse;width:100%}
+table.cal td,table.cal th{padding:4px 6px;border-bottom:1px solid var(--line);text-align:left}
+table.cal th{color:var(--mut);font-weight:500}
+.tag{font-size:10px;border-radius:4px;padding:1px 5px;margin-left:4px}
+.tag.m{background:#163A2A;color:var(--ok)} .tag.u{background:#3A2E12;color:var(--warn)}
+.row{display:flex;gap:8px;align-items:center;margin:6px 0;flex-wrap:wrap}
+.row label{min-width:170px;color:var(--mut)}
+pre.raw{background:#0A0F13;border:1px solid var(--line);border-radius:6px;padding:10px;white-space:pre-wrap;word-break:break-all;font:11px/1.45 ui-monospace,Consolas,monospace;max-height:320px;overflow:auto;margin:0}
+.note{color:var(--mut);font-size:12px;margin:6px 0}
+</style>
+</head>
+<body>
+
+<div id="top">
+  <h1>Wrap Renderer</h1>
+  <span class="meta" style="color:var(--mut)">On-screen guides:</span>
+  <button class="gbtn" id="gInf" title="Ctrl+Shift+F9"><span class="dot" style="background:var(--red)"></span>Infloww <kbd>Ctrl+Shift+F9</kbd></button>
+  <button class="gbtn" id="gPC" title="Ctrl+Shift+F12"><span class="dot" style="background:var(--green)"></span>PC <kbd>Ctrl+Shift+F12</kbd></button>
+  <button class="gbtn" id="gMob" title="Ctrl+Shift+F7"><span class="dot" style="background:var(--cyan)"></span>Mobile <kbd>Ctrl+Shift+F7</kbd></button>
+  <span id="hostNote"></span>
+  <span class="sp"></span>
+  <div style="display:flex;align-items:center;gap:8px">
+    <span class="meta" style="color:var(--mut)">Previews:</span>
+    <div class="grp" id="pvToggles">
+      <button id="pvInf" title="Show or hide the Infloww preview">Infloww</button>
+      <button id="pvPC" title="Show or hide the PC preview">PC</button>
+      <button id="pvMob" title="Show or hide the Mobile preview">Mobile</button>
+    </div>
+  </div>
+  <button id="btnInspect">Paste inspector</button>
+  <button id="btnCal">Calibration</button>
+</div>
+
+<div id="main">
+  <!-- ===== editor ===== -->
+  <section class="card" id="edCard">
+    <header><b>Message</b><span class="meta" id="edMeta"></span><span class="sp"></span>
+      <button id="btnSample" title="Load a neutral sample message">Sample</button>
+      <button id="btnClear">Clear</button>
+    </header>
+    <div id="tb">
+      <div class="grp" id="tbSize"></div>
+      <div class="grp" id="tbColor"></div>
+      <div class="grp">
+        <button id="tbB" title="Bold (Ctrl+B)"><b>B</b></button>
+        <button id="tbI" title="Italic (Ctrl+I)"><i>I</i></button>
+        <button id="tbX" title="Clear formatting">Tx</button>
+      </div>
+    </div>
+    <div id="edWrap"><div id="ed" contenteditable="true" spellcheck="false"></div></div>
+    <div id="edFoot">
+      <button id="btnPaste" title="Paste from clipboard (or just Ctrl+V in the editor)">Paste</button>
+      <button id="btnCopy" title="Copy everything as rich text for Infloww">Copy for Infloww</button>
+      <button id="btnCopyPlain">Copy plain</button>
+      <span class="meta">Copying a selection (Ctrl+C) also exports rich text.</span>
+    </div>
+  </section>
+
+  <!-- ===== previews ===== -->
+  <div id="pv">
+    <section class="card" id="infCard">
+      <header><b>Infloww</b><span class="meta" id="infMeta"></span><span class="sp"></span>
+        <button id="pgInf" class="on" title="Alt+1">Guides</button>
+      </header>
+      <div class="pvBody">
+        <div id="infBubble"><div class="txtbox" id="infBox">
+          <div class="gd" style="left:0"></div><div class="gd c" id="infC"></div><div class="gd" id="infR"></div>
+          <div class="txt" id="infTxt"></div>
+        </div></div>
+      </div>
+    </section>
+
+    <section class="card" id="pcCard">
+      <header><b>PC</b><span class="meta" id="pcMeta"></span><span class="sp"></span>
+        <button id="pgPC" class="on" title="Alt+3">Guides</button>
+      </header>
+      <div class="pvBody">
+        <div id="pcBubble"><div class="txtbox" id="pcBox">
+          <div class="gd" style="left:0"></div><div class="gd c" id="pcC"></div><div class="gd" id="pcR"></div>
+          <div class="txt" id="pcTxt"></div>
+        </div></div>
+      </div>
+    </section>
+
+    <section class="card" id="mobCard">
+      <header><b id="mobTitle">iPhone</b><span class="meta" id="mobMeta"></span><span class="sp"></span>
+        <button id="mobOS" title="Switch the phone preview between iPhone and Android">iPhone</button>
+        <button id="mobTheme" title="Light / dark mode on the phone">Light</button>
+        <button id="pgMob" class="on" title="Alt+2">Guides</button>
+      </header>
+      <div class="pvBody">
+        <div id="phone" class="light">
+          <div class="bar"><span>2:36</span><span>5G ▮</span></div>
+          <div class="chatHead">Creator</div>
+          <div id="phoneScroll">
+            <div id="mobBubble"><div class="txtbox" id="mobBox">
+              <div class="gd" style="left:0"></div><div class="gd c" id="mobC"></div><div class="gd" id="mobR"></div>
+              <div class="txt" id="mobTxt"></div>
+            </div></div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+</div>
+
+<!-- ===== calibration drawer ===== -->
+<aside class="drawer" id="calDrawer">
+  <header><b>Calibration</b><button id="calReset">Reset to defaults</button><button data-close>Close</button></header>
+  <div class="body" id="calBody"></div>
+</aside>
+
+<!-- ===== paste inspector ===== -->
+<aside class="drawer" id="insDrawer">
+  <header><b>Paste inspector</b><button data-close>Close</button></header>
+  <div class="body">
+    <p class="note">Shows exactly what the last paste put on the clipboard and how it was read. Paste a formatted message from Infloww here once to confirm the size and colour mapping.</p>
+    <h3>Detected format classes</h3><div id="insClasses" class="note">Nothing pasted yet.</div>
+    <h3>Parsed result</h3><div id="insParsed" class="note">—</div>
+    <h3>Raw text/html</h3><pre class="raw" id="insRaw">—</pre>
+    <h3>Last export (what "Copy for Infloww" writes)</h3><pre class="raw" id="insExport">—</pre>
+  </div>
+</aside>
+
+<div id="toast"></div>
+
+<script>
+'use strict';
+/* ==========================================================================
+   CONSTANTS + CALIBRATION
+   Measured values come from the user's screenshots (Infloww dark, iPhone 16 Pro
+   light). Anything flagged measured:false is a placeholder until calibrated.
+   ========================================================================== */
+const LEVELS = ['xs','sm','md','lg','xl'];
+const LEVEL_LABEL = {xs:'Smallest', sm:'Small', md:'Medium', lg:'Large', xl:'Largest'};
+const COLORS = ['def','grey','blue'];
+const COLOR_LABEL = {def:'White', grey:'Grey', blue:'Blue'};
+const DEVICES = [
+  {id:'ip16pro', name:'iPhone 16 Pro — 402', w:402},
+  {id:'ip16',    name:'iPhone 14/15/16 (Pro) — 393', w:393},
+  {id:'ip16pm',  name:'iPhone 16 Pro Max — 440', w:440},
+  {id:'ip15pm',  name:'iPhone 14/15 Pro Max, 16 Plus — 430', w:430},
+  {id:'ipse',    name:'iPhone SE / mini — 375', w:375},
+  {id:'android', name:'Android — 411', w:411, pct:68.4},   // measured on a 1440px screen at 3.5x: bubble 281px, not 70%
+  {id:'custom',  name:'Custom width', w:null},
+];
+// Overlay geometry in 1920x1080 reference px (decoded from wrap_overlay.exe)
+const OVERLAY_LEFT_REF = 615, OVERLAY_WRAP_DEFAULT_REF = 957;
+// PC (OnlyFans web chat) guide defaults, measured from a 1920-wide screenshot; mirror GUIDE_PC_* in wr_common.py
+const PC_LEFT_REF_DEFAULT = 1061, PC_WIDTH_DEFAULT = 390;
+
+// Preview panes in display order. doRefresh() and the Previews toggles both read this.
+const PANES = [
+  {key:'infloww', card:'infCard', btn:'pvInf', txt:'infTxt', meta:'infMeta', width:()=>S.inflowwWidth},
+  {key:'pc',      card:'pcCard',  btn:'pvPC',  txt:'pcTxt',  meta:'pcMeta',  width:()=>S.pcWidth},
+  {key:'mobile',  card:'mobCard', btn:'pvMob', txt:'mobTxt', meta:'mobMeta', width:()=>mobileTextWidth().toFixed(1)},
+];
+
+const DEFAULTS = {
+  sizes: {
+    infloww: {xs:12, sm:14, md:16, lg:20, xl:26},
+    mobile:  {xs:12, sm:14, md:16, lg:20, xl:26},
+    pc:      {xs:12, sm:14, md:16, lg:20, xl:26},   // OnlyFans web: default 16px / 24px line, Large 20px (same as Infloww)
+  },
+  // which numbers were actually measured from screenshots (Infloww: all 5 from the TEST screenshot; mobile: Medium + Large, others assumed equal to Infloww since those two matched; PC: default + Large from a chat screenshot)
+  measured: { infloww:{xs:true, sm:true, md:true, lg:true, xl:true}, mobile:{md:true, lg:true}, pc:{md:true, lg:true} },
+  lineHeight: 24,
+  inflowwWidth: OVERLAY_WRAP_DEFAULT_REF - OVERLAY_LEFT_REF,  // 342
+  pcLeft: PC_LEFT_REF_DEFAULT, pcWidth: PC_WIDTH_DEFAULT,      // PC guide: left text edge + text width (1920-ref px)
+  bubblePadPC: 12,
+  linkOverlay: true,
+  device: 'ip16pro', lastIphone: 'ip16pro', customW: 402,
+  bubblePct: 70, bubblePad: 12,
+  mobileTheme: 'light',
+  exportBreaks: 'br',        // 'br' | 'p'
+  exportInlineStyles: true,
+  learned: { size:{}, color:{} }, // class tokens seen in pasted HTML, reused on export
+  previewGuides: { infloww:true, mobile:true, pc:true },
+  panes: { infloww:true, pc:true, mobile:true },   // which preview panes are shown; hidden ones drop out of the wrap comparison
+  draft: null,
+};
+const PALETTE = { // export colours = Infloww (dark) values
+  infloww: {def:'#F6F7F8', grey:'#8A96A3', blue:'#45ADED'},
+};
+
+let S = clone(DEFAULTS);
+let chars = [];          // document model: [{t:'a', s:'md', c:'def', b:false, i:false}] one per UTF-16 unit
+let pending = null, pendingAt = -1; // typing style for a collapsed caret
+let host = null, hostState = null;
+let lastPasteInfo = null;
+
+/* ==========================================================================
+   SMALL HELPERS
+   ========================================================================== */
+function clone(o){ return JSON.parse(JSON.stringify(o)); }
+function $(id){ return document.getElementById(id); }
+function esc(t){ return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function plainStyle(){ return {s:'md', c:'def', b:false, i:false}; }
+function pick(o){ return {s:o.s, c:o.c, b:!!o.b, i:!!o.i}; }
+function same(a,b){ return a.s===b.s && a.c===b.c && !!a.b===!!b.b && !!a.i===!!b.i; }
+function toast(msg){ const t=$('toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(toast._t); toast._t=setTimeout(()=>t.classList.remove('show'),1800); }
+function deepMerge(base, over){
+  if(!over || typeof over!=='object') return base;
+  for(const k of Object.keys(over)){
+    if(over[k] && typeof over[k]==='object' && !Array.isArray(over[k]) && base[k] && typeof base[k]==='object') deepMerge(base[k], over[k]);
+    else base[k]=over[k];
+  }
+  return base;
+}
+function deviceWidth(){ const d=DEVICES.find(x=>x.id===S.device)||DEVICES[0]; return d.w || +S.customW || 402; }
+function mobileTextWidth(){ const d=DEVICES.find(x=>x.id===S.device)||DEVICES[0]; return Math.round(deviceWidth()*(d.pct||S.bubblePct)/100*100)/100 - 2*S.bubblePad; }
+function textToChars(text, st){ const out=[]; for(let k=0;k<text.length;k++) out.push({t:text[k], ...pick(st)}); return out; }
+
+/* ==========================================================================
+   COLOUR + SIZE CLASSIFICATION (for pasted HTML)
+   ========================================================================== */
+const _cctx = document.createElement('canvas').getContext('2d');
+function parseColor(str){
+  _cctx.fillStyle = '#010203'; _cctx.fillStyle = str; const v=_cctx.fillStyle;
+  if(v==='#010203' && !/^#?010203$/i.test(str.trim())) return null;
+  if(v[0]==='#') return {r:parseInt(v.slice(1,3),16), g:parseInt(v.slice(3,5),16), b:parseInt(v.slice(5,7),16), a:1};
+  const m=v.match(/rgba?\(([^)]+)\)/); if(!m) return null;
+  const p=m[1].split(',').map(Number); return {r:p[0],g:p[1],b:p[2],a:p.length>3?p[3]:1};
+}
+function classifyColor(str){
+  if(!str || /inherit|initial|unset|currentcolor/i.test(str)) return null;
+  const c=parseColor(str); if(!c || c.a===0) return null;
+  const r=c.r/255,g=c.g/255,b=c.b/255, mx=Math.max(r,g,b), mn=Math.min(r,g,b), l=(mx+mn)/2, d=mx-mn;
+  const s = d===0 ? 0 : d/(1-Math.abs(2*l-1));
+  let h=0; if(d){ if(mx===r) h=60*(((g-b)/d)%6); else if(mx===g) h=60*((b-r)/d+2); else h=60*((r-g)/d+4); } if(h<0) h+=360;
+  if(s>=0.35 && h>=180 && h<=255 && l>0.25 && l<0.85) return 'blue';
+  if(s<0.3 && l>=0.38 && l<=0.72) return 'grey';
+  return 'def';
+}
+const KW_PX = {'xx-small':9,'x-small':10,'small':13,'medium':16,'large':18,'x-large':24,'xx-large':32,'xxx-large':48};
+function toPx(v, parentPx){
+  v=String(v).trim().toLowerCase(); if(KW_PX[v]) return KW_PX[v];
+  const m=v.match(/^([\d.]+)(px|pt|em|rem|%)?$/); if(!m) return null;
+  const n=parseFloat(m[1]);
+  switch(m[2]){ case 'pt': return n*4/3; case 'em': return n*parentPx; case 'rem': return n*16; case '%': return n/100*parentPx; default: return n; }
+}
+function nearestLevel(px, platform='infloww'){
+  let best='md', bd=1e9; for(const lv of LEVELS){ const d=Math.abs(S.sizes[platform][lv]-px); if(d<bd){bd=d;best=lv;} } return best;
+}
+const SIZE_CTX = new Set(['fs','font','size','fontsize','text','txt','sz']);
+const SIZE_WORDS = [
+  ['xl',['largest','xl','xxl','huge','biggest','extra-large']],
+  ['lg',['large','lg','l','big','bigger']],
+  ['xs',['smallest','xs','xxs','tiny']],
+  ['sm',['small','sm','s','smaller']],
+  ['md',['medium','md','m','default','normal','regular','base']],
+];
+// Reads a class token like "m-editor-fs__lg" / "text-blue". Returns {lv,col}.
+function classToken(tok){
+  const parts=tok.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  let col=null, lv=null;
+  if(parts.some(p=>/^gr[ae]y/.test(p))) col='grey'; else if(parts.some(p=>/^blue/.test(p))) col='blue';
+  const ci=parts.findIndex(p=>SIZE_CTX.has(p)||p.includes('size'));
+  if(ci>=0){ const rest=parts.slice(ci+1); for(const [L,words] of SIZE_WORDS){ if(rest.some(p=>words.includes(p))){ lv=L; break; } } }
+  return {lv,col};
+}
+function resolveStyle(el, inh, learn){
+  const s={...inh}; const tag=el.tagName;
+  if(tag==='B'||tag==='STRONG') s.b=true;
+  if(tag==='I'||tag==='EM') s.i=true;
+  if(tag==='FONT'){
+    const sz=el.getAttribute('size'); if(sz){ const lv={1:'xs',2:'sm',3:'md',4:'lg',5:'lg',6:'xl',7:'xl'}[sz.replace(/^\+/,'')]; if(lv){s.s=lv; s.px=S.sizes.infloww[lv];} }
+    const col=el.getAttribute('color'); if(col){ const c=classifyColor(col); if(c) s.c=c; }
+  }
+  const d=el.dataset||{};
+  if(d.s && LEVELS.includes(d.s)){ s.s=d.s; s.px=S.sizes.infloww[d.s]; }
+  if(d.c && COLORS.includes(d.c)) s.c=d.c;
+  if(d.b!=null) s.b=d.b==='1';
+  if(d.i!=null) s.i=d.i==='1';
+  if(!d.s && el.classList && el.classList.length){
+    for(const tok of el.classList){
+      const r=classToken(tok);
+      if(r.lv){ s.s=r.lv; s.px=S.sizes.infloww[r.lv]; if(learn) learn.size[r.lv]=tok; }
+      if(r.col){ s.c=r.col; if(learn) learn.color[r.col]=tok; }
+    }
+  }
+  const st=el.style;
+  if(st){
+    if(st.fontWeight){ const w=st.fontWeight; if(w==='bold'||w==='bolder'||(+w>=500)) s.b=true; else if(w==='normal'||w==='lighter'||(+w && +w<500)) s.b=false; }
+    if(st.fontStyle){ s.i=/italic|oblique/.test(st.fontStyle); }
+    if(st.fontSize){ const px=toPx(st.fontSize, inh.px||16); if(px){ s.px=px; s.s=nearestLevel(px,'infloww'); } }
+    if(st.color){ const c=classifyColor(st.color); if(c) s.c=c; }
+  }
+  return s;
+}
+
+/* ==========================================================================
+   DOM -> MODEL. One walker for the editor, pasted HTML and selection maths.
+   collapse:true applies normal-HTML whitespace collapsing (for pasted HTML).
+   ========================================================================== */
+const BLOCK = new Set(['DIV','P','LI','UL','OL','H1','H2','H3','H4','H5','H6','TR','TABLE','BLOCKQUOTE','PRE','SECTION','ARTICLE','HEADER','FOOTER','DD','DT','DL','FIGURE','ADDRESS']);
+const SKIP  = new Set(['SCRIPT','STYLE','HEAD','META','TITLE','TEMPLATE','NOSCRIPT','LINK','svg','SVG']);
+function walk(root, {collapse=false, learn=null}={}){
+  const out=[]; let needBreak=false;
+  const trimTail=()=>{ while(out.length && out[out.length-1]._c) out.pop(); };
+  const flushBreak=(st)=>{ if(needBreak){ trimTail(); if(out.length && out[out.length-1].t!=='\n') out.push({t:'\n',...pick(st)}); needBreak=false; } };
+  function rec(node, st, pre){
+    for(const n of node.childNodes){
+      if(n.nodeType===3){
+        let txt=n.nodeValue; if(!txt) continue;
+        if(!pre){
+          txt=txt.replace(/[\t\n\r\f ]+/g,' ');
+          for(let k=0;k<txt.length;k++){
+            const ch=txt[k];
+            if(ch===' '){ const last=out[out.length-1]; if(needBreak || !last || last.t==='\n' || last._c) continue; out.push({t:' ',...pick(st),_c:true}); }
+            else { flushBreak(st); out.push({t:ch,...pick(st)}); }
+          }
+        } else {
+          for(let k=0;k<txt.length;k++){ flushBreak(st); out.push({t:txt[k],...pick(st)}); }
+        }
+      } else if(n.nodeType===1){
+        const tag=n.tagName; if(SKIP.has(tag)) continue;
+        if(tag==='BR'){ if(n.dataset && n.dataset.ph) continue; flushBreak(st); trimTail(); out.push({t:'\n',...pick(st)}); continue; }
+        const st2=resolveStyle(n, st, learn);
+        let pre2=pre; const ws=n.style && n.style.whiteSpace; if(ws) pre2=/pre|break-spaces/.test(ws); if(tag==='PRE'||tag==='TEXTAREA') pre2=true;
+        const blk=BLOCK.has(tag);
+        if(blk) needBreak=true;
+        rec(n, st2, pre2);
+        if(blk) needBreak=true;
+      }
+    }
+  }
+  rec(root, {...plainStyle(), px:16}, !collapse);
+  trimTail();
+  return out.map(pick).map((c,k)=>({t:out[k].t, ...c}));
+}
+
+/* ==========================================================================
+   MODEL -> HTML
+   ========================================================================== */
+function spanFor(a, text){
+  return `<span data-s="${a.s}" data-c="${a.c}" data-b="${a.b?1:0}" data-i="${a.i?1:0}" class="s-${a.s} c-${a.c}${a.b?' fb':''}${a.i?' fi':''}">${esc(text)}</span>`;
+}
+function runsHTML(arr){
+  let h='', i=0;
+  while(i<arr.length){ let j=i, t=''; while(j<arr.length && same(arr[j],arr[i])){ t+=arr[j].t; j++; } h+=spanFor(arr[i],t); i=j; }
+  return h;
+}
+function splitLines(arr){ const lines=[[]]; for(const c of arr){ if(c.t==='\n') lines.push([]); else lines[lines.length-1].push(c); } return lines; }
+function plainText(arr){ return arr.map(c=>c.t).join(''); }
+
+// Export for pasting into Infloww / OF. Runs of 2+ spaces become "&nbsp; " pairs (same as a
+// browser editor stores them) so padding survives the paste; existing NBSPs stay NBSPs.
+function exportHTML(arr){
+  const lines=splitLines(arr);
+  const htmlLines=lines.map(line=>{
+    const units=line.map(c=>c.t);
+    const outU=units.map(u=>u===' '?'&nbsp;':esc(u));
+    for(let k=0;k<units.length;k++){
+      if(units[k]!==' ') continue;
+      let e=k; while(e<units.length && units[e]===' ') e++;
+      const run=e-k, atStart=k===0, atEnd=e===units.length;
+      for(let q=k;q<e;q++){ const p=q-k; outU[q] = (run===1 && !atStart && !atEnd) ? ' ' : ((p%2===0) ? '&nbsp;' : ' '); }
+      if(atEnd) outU[e-1]='&nbsp;';
+      k=e-1;
+    }
+    let h='', i=0;
+    while(i<line.length){
+      let j=i, t=''; while(j<line.length && same(line[j],line[i])){ t+=outU[j]; j++; }
+      const a=line[i]; const style=[], cls=[];
+      if(S.exportInlineStyles){
+        if(a.s!=='md') style.push(`font-size:${S.sizes.infloww[a.s]}px`);
+        if(a.c!=='def') style.push(`color:${PALETTE.infloww[a.c]}`);
+      }
+      if(S.learned.size[a.s] && a.s!=='md') cls.push(S.learned.size[a.s]);
+      if(S.learned.color[a.c] && a.c!=='def') cls.push(S.learned.color[a.c]);
+      let inner=t; if(a.i) inner=`<i>${inner}</i>`; if(a.b) inner=`<b>${inner}</b>`;
+      if(style.length||cls.length) inner=`<span${cls.length?` class="${cls.join(' ')}"`:''}${style.length?` style="${style.join(';')}"`:''}>${inner}</span>`;
+      h+=inner; i=j;
+    }
+    return h;
+  });
+  const body = S.exportBreaks==='p' ? htmlLines.map(l=>`<p>${l||'<br>'}</p>`).join('') : htmlLines.join('<br>');
+  const html = `<meta charset="utf-8">${body}`;
+  $('insExport').textContent = html;
+  return html;
+}
+
+/* ==========================================================================
+   EDITOR: render, selection, model operations, history
+   ========================================================================== */
+const ed = $('ed');
+function renderEditor(){
+  ed.innerHTML = runsHTML(chars) + (chars.length && chars[chars.length-1].t==='\n' ? '<br data-ph="1">' : '');
+}
+function syncFromDom(){ chars = walk(ed); }
+function indexAt(container, offset){
+  const r=document.createRange(); r.setStart(ed,0);
+  try{ r.setEnd(container, offset); }catch(e){ return 0; }
+  const d=document.createElement('div'); d.appendChild(r.cloneContents());
+  return walk(d).length;
+}
+function getSel(){
+  const s=getSelection(); if(!s.rangeCount) return null;
+  const r=s.getRangeAt(0); if(!ed.contains(r.startContainer)) return null;
+  const a=indexAt(r.startContainer, r.startOffset);
+  const b=r.collapsed ? a : indexAt(r.endContainer, r.endOffset);
+  return [Math.min(a,b), Math.max(a,b)];
+}
+function pointAt(idx){
+  let pos=0; const tw=document.createTreeWalker(ed, NodeFilter.SHOW_TEXT|NodeFilter.SHOW_ELEMENT); let n;
+  const indexIn=x=>Array.prototype.indexOf.call(x.parentNode.childNodes, x);
+  while((n=tw.nextNode())){
+    if(n.nodeType===3){ const L=n.nodeValue.length; if(idx<=pos+L) return [n, idx-pos]; pos+=L; }
+    else if(n.tagName==='BR'){ if(idx<=pos) return [n.parentNode, indexIn(n)]; if(!n.dataset.ph) pos+=1; }
+  }
+  return [ed, ed.childNodes.length];
+}
+function setSel(a, b=a){
+  const s=getSelection(); const r=document.createRange();
+  const [n1,o1]=pointAt(a), [n2,o2]=pointAt(b);
+  r.setStart(n1,o1); r.setEnd(n2,o2); s.removeAllRanges(); s.addRange(r);
+}
+function styleAt(idx){
+  const c = chars[idx-1] || chars[idx];
+  return c ? pick(c) : plainStyle();
+}
+let hist=[], fut=[], lastTypeSnap=0;
+function snap(){ return {c:JSON.stringify(chars), sel:getSel()}; }
+function pushHistory(){
+  const s=snap(); if(hist.length && hist[hist.length-1].c===s.c) return;
+  hist.push(s); if(hist.length>300) hist.shift(); fut=[];
+}
+function restore(sn){ chars=JSON.parse(sn.c); renderEditor(); if(sn.sel) setSel(sn.sel[0], sn.sel[1]); refresh(); }
+function undo(){ syncFromDom(); const p=hist.pop(); if(!p) return; fut.push(snap()); restore(p); }
+function redo(){ syncFromDom(); const n=fut.pop(); if(!n) return; hist.push(snap()); restore(n); }
+
+function modelReplace(a, b, ins){
+  chars.splice(a, b-a, ...ins);
+  renderEditor(); setSel(a+ins.length); pending=null; refresh();
+}
+function modelInsertText(text){
+  syncFromDom(); const sel=getSel()||[chars.length,chars.length]; pushHistory();
+  const st = pending || styleAt(sel[0]);
+  modelReplace(sel[0], sel[1], textToChars(text, st));
+}
+function applyFormat(key, val){
+  ed.focus(); syncFromDom();
+  const sel=getSel() || [chars.length, chars.length]; const [a,b]=sel;
+  if(a===b){
+    const base = pending || styleAt(a);
+    pending = key==='clear' ? plainStyle() : {...base, [key]: (key==='b'||key==='i') ? !base[key] : val};
+    pendingAt=a; updateToolbar(); return;
+  }
+  pushHistory();
+  let v=val;
+  if(key==='b'||key==='i'){ const seg=chars.slice(a,b).filter(c=>c.t!=='\n'); v=!(seg.length && seg.every(c=>c[key])); }
+  for(let k=a;k<b;k++){ if(key==='clear') Object.assign(chars[k], plainStyle()); else chars[k][key]=v; }
+  renderEditor(); setSel(a,b); refresh();
+}
+
+/* ---- editor events ---- */
+ed.addEventListener('beforeinput', e=>{
+  const t=e.inputType;
+  if(t==='insertParagraph' || t==='insertLineBreak'){ e.preventDefault(); modelInsertText('\n'); return; }
+  if(t==='insertText' && pending){ e.preventDefault(); modelInsertText(e.data||''); return; }
+  if(t==='historyUndo'){ e.preventDefault(); undo(); return; }
+  if(t==='historyRedo'){ e.preventDefault(); redo(); return; }
+  if(t==='formatBold'){ e.preventDefault(); applyFormat('b'); return; }
+  if(t==='formatItalic'){ e.preventDefault(); applyFormat('i'); return; }
+  if(t.startsWith('format') || t==='insertFromDrop'){ e.preventDefault(); return; }
+  // native typing/deleting: snapshot before it if we've been idle a moment
+  const now=Date.now(); if(now-lastTypeSnap>700){ syncFromDom(); pushHistory(); } lastTypeSnap=now;
+});
+ed.addEventListener('input', ()=>{
+  // Chrome sometimes injects <div>/<font>/styled spans; fold them back into the model.
+  if(ed.querySelector('div,p,font,b,i,strong,em,u,span:not([data-s]),span span,br:not([data-ph])')){
+    const sel=getSel(); syncFromDom(); renderEditor(); if(sel) setSel(sel[0], sel[1]);
+  } else syncFromDom();
+  refresh();
+});
+ed.addEventListener('keydown', e=>{
+  const k=e.key.toLowerCase(), mod=e.ctrlKey||e.metaKey;
+  if(mod && k==='z' && !e.shiftKey){ e.preventDefault(); undo(); }
+  else if(mod && (k==='y' || (k==='z' && e.shiftKey))){ e.preventDefault(); redo(); }
+  else if(mod && k==='b'){ e.preventDefault(); applyFormat('b'); }
+  else if(mod && k==='i'){ e.preventDefault(); applyFormat('i'); }
+  else if(mod && k==='u'){ e.preventDefault(); }
+});
+ed.addEventListener('paste', e=>{
+  e.preventDefault();
+  doPaste(e.clipboardData.getData('text/html'), e.clipboardData.getData('text/plain'));
+});
+ed.addEventListener('drop', e=>{ e.preventDefault(); });
+function exportSelection(e, cut){
+  const sel=getSel(); if(!sel || sel[0]===sel[1]) return;
+  syncFromDom(); e.preventDefault();
+  const part=chars.slice(sel[0], sel[1]);
+  e.clipboardData.setData('text/html', exportHTML(part));
+  e.clipboardData.setData('text/plain', plainText(part));
+  if(cut){ pushHistory(); modelReplace(sel[0], sel[1], []); }
+}
+ed.addEventListener('copy', e=>exportSelection(e,false));
+ed.addEventListener('cut', e=>exportSelection(e,true));
+document.addEventListener('selectionchange', ()=>{
+  if(pending){ const s=getSel(); if(!s || s[0]!==pendingAt || s[1]!==pendingAt) pending=null; }
+  updateToolbar();
+});
+
+// Chrome marks a plain space at the edge of a formatting tag when copying: it writes <span>&nbsp;</span> (a bare span,
+// or class "Apple-converted-space" in older versions). Turn exactly those back into spaces so pasted text wraps like
+// the real message. Any other NBSP is deliberate and stays. Seen on the real clipboard from OnlyFans in Chrome.
+function restoreCopiedSpaces(doc){
+  doc.querySelectorAll('span').forEach(e=>{
+    if(e.textContent===' ' && !e.children.length && (!e.attributes.length || e.className==='Apple-converted-space')) e.textContent=' ';
+  });
+}
+
+function doPaste(html, text){
+  ed.focus(); syncFromDom();
+  const sel=getSel() || [chars.length, chars.length]; pushHistory();
+  let ins; const learn={size:{}, color:{}};
+  if(html && html.trim()){
+    const doc=new DOMParser().parseFromString(html, 'text/html');
+    restoreCopiedSpaces(doc);
+    ins = walk(doc.body, {collapse:true, learn});
+  } else {
+    ins = textToChars((text||'').replace(/\r\n?/g,'\n'), pending || styleAt(sel[0]));
+  }
+  Object.assign(S.learned.size, learn.size); Object.assign(S.learned.color, learn.color);
+  lastPasteInfo = {html, text, learn, ins};
+  updateInspector(); saveSettingsSoon();
+  modelReplace(sel[0], sel[1], ins);
+  toast(html ? 'Pasted with formatting' : 'Pasted plain text');
+}
+
+/* ==========================================================================
+   TOOLBAR
+   ========================================================================== */
+function buildToolbar(){
+  $('tbSize').innerHTML = LEVELS.map(l=>`<button data-s="${l}" title="${LEVEL_LABEL[l]}">${LEVEL_LABEL[l]}</button>`).join('');
+  $('tbColor').innerHTML = COLORS.map(c=>`<button data-c="${c}"><span class="dot" style="display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px;background:${PALETTE.infloww[c]}"></span>${COLOR_LABEL[c]}</button>`).join('');
+  document.querySelectorAll('#tb button').forEach(b=>b.addEventListener('mousedown', e=>e.preventDefault()));
+  $('tbSize').addEventListener('click', e=>{ const b=e.target.closest('button'); if(b) applyFormat('s', b.dataset.s); });
+  $('tbColor').addEventListener('click', e=>{ const b=e.target.closest('button'); if(b) applyFormat('c', b.dataset.c); });
+  $('tbB').onclick=()=>applyFormat('b'); $('tbI').onclick=()=>applyFormat('i'); $('tbX').onclick=()=>applyFormat('clear');
+}
+function updateToolbar(){
+  const sel=getSel(); let st=null, mixed={};
+  if(sel){
+    if(sel[0]===sel[1]) st = pending || styleAt(sel[0]);
+    else { const seg=chars.slice(sel[0],sel[1]).filter(c=>c.t!=='\n'); if(seg.length){ st=pick(seg[0]); for(const c of seg){ for(const k of ['s','c','b','i']) if(c[k]!==st[k]) mixed[k]=true; } } }
+  }
+  document.querySelectorAll('#tbSize button').forEach(b=>b.classList.toggle('on', !!st && !mixed.s && st.s===b.dataset.s));
+  document.querySelectorAll('#tbColor button').forEach(b=>b.classList.toggle('on', !!st && !mixed.c && st.c===b.dataset.c));
+  $('tbB').classList.toggle('on', !!st && !mixed.b && st.b);
+  $('tbI').classList.toggle('on', !!st && !mixed.i && st.i);
+}
+
+/* ==========================================================================
+   PREVIEWS + WRAP COMPARISON
+   ========================================================================== */
+function applyPaneVars(){
+  const inf=$('infTxt'), mob=$('mobTxt'), pc=$('pcTxt');
+  for(const lv of LEVELS){ inf.style.setProperty('--'+lv, S.sizes.infloww[lv]+'px'); mob.style.setProperty('--'+lv, S.sizes.mobile[lv]+'px'); pc.style.setProperty('--'+lv, S.sizes.pc[lv]+'px'); ed.style.setProperty('--'+lv, S.sizes.infloww[lv]+'px'); }
+  for(const el of [inf,mob,pc,ed]) el.style.lineHeight = S.lineHeight+'px';
+  const iw=S.inflowwWidth, mw=mobileTextWidth(), dw=deviceWidth(), pw=S.pcWidth;
+  $('infBox').style.width=iw+'px'; $('infR').style.left=iw+'px'; $('infC').style.left=Math.floor(iw/2)+'px';
+  $('pcBox').style.width=pw+'px'; $('pcR').style.left=pw+'px'; $('pcC').style.left=Math.floor(pw/2)+'px';
+  $('pcBubble').style.padding=S.bubblePadPC+'px';
+  $('pcBox').classList.toggle('noguides', !S.previewGuides.pc); $('pgPC').classList.toggle('on', S.previewGuides.pc);
+  $('mobBox').style.width=mw+'px'; $('mobR').style.left=mw+'px'; $('mobC').style.left=Math.floor(mw/2)+'px';
+  $('phone').style.width=(dw+20)+'px';
+  $('mobBubble').style.width=(mw+2*S.bubblePad)+'px'; $('mobBubble').style.padding=S.bubblePad+'px';
+  $('mobTxt').classList.toggle('ios', S.device.startsWith('ip')); $('mobTxt').classList.toggle('android', S.device==='android'); $('mobOS').textContent = S.device==='android'?'Android':'iPhone'; $('phone').className=S.mobileTheme; $('mobTheme').textContent = S.mobileTheme==='light'?'Light':'Dark';
+  $('infBox').classList.toggle('noguides', !S.previewGuides.infloww); $('pgInf').classList.toggle('on', S.previewGuides.infloww);
+  $('mobBox').classList.toggle('noguides', !S.previewGuides.mobile);  $('pgMob').classList.toggle('on', S.previewGuides.mobile);
+  for(const p of PANES){ $(p.card).hidden=!S.panes[p.key]; $(p.btn).classList.toggle('on', S.panes[p.key]); }
+  const dev=DEVICES.find(x=>x.id===S.device)||DEVICES[0];
+  $('mobTitle').textContent = dev.id==='custom' ? `Phone ${dw}` : dev.name.split(' — ')[0];
+  $('infMeta').textContent = `${iw}px text width`;
+  pushRatioToHost(); pushPcToHost();
+}
+function renderPane(el, lines){
+  el.innerHTML = lines.map((ln,k)=>`<div class="ln" data-i="${k}">${ln.length?runsHTML(ln):'<br>'}</div>`).join('');
+}
+function visualLines(div){
+  const r=document.createRange(); r.selectNodeContents(div);
+  const rects=[...r.getClientRects()].filter(x=>x.height>0);
+  if(!rects.length) return 1;
+  rects.sort((a,b)=>a.top-b.top);
+  let n=0, bottom=-1e9;
+  for(const x of rects){ const mid=(x.top+x.bottom)/2; if(mid>bottom){ n++; bottom=x.bottom; } else bottom=Math.max(bottom,x.bottom); }
+  return n;
+}
+let _raf=0;
+function refresh(){ cancelAnimationFrame(_raf); _raf=requestAnimationFrame(doRefresh); }
+function doRefresh(){
+  const lines=splitLines(chars);
+  // Hidden panes are display:none, so they can't be measured: compare only what's on screen, in pane order.
+  const vis=PANES.filter(p=>S.panes[p.key]).map(p=>{ renderPane($(p.txt), lines); return {...p, els:[...$(p.txt).children], total:0}; });
+  let diff=0;
+  for(let k=0;k<lines.length;k++){
+    const counts=vis.map(v=>{ const n=visualLines(v.els[k]); v.total+=n; return n; });
+    if(new Set(counts).size>1){ diff++; for(const v of vis){ v.els[k].classList.add('diff'); v.els[k].dataset.badge = counts.join('→'); } }  // e.g. Infloww → PC → mobile
+  }
+  vis.forEach((v,i)=>{ $(v.meta).textContent = `${v.width()}px · ${v.total} lines` + (diff && i===vis.length-1 ?` · ${diff} wrap differently`:''); });
+  const n=plainText(chars).length; $('edMeta').textContent = n ? `${n} chars` : '';
+  updateToolbar(); saveSettingsSoon();
+}
+
+/* ==========================================================================
+   COPY / PASTE BUTTONS
+   ========================================================================== */
+function copyAll(rich){
+  syncFromDom();
+  const html=exportHTML(chars), text=plainText(chars);
+  const h=e=>{ e.preventDefault(); if(rich) e.clipboardData.setData('text/html', html); e.clipboardData.setData('text/plain', text); };
+  document.addEventListener('copy', h, {once:true});
+  const ok=document.execCommand('copy');
+  document.removeEventListener('copy', h);
+  if(!ok && navigator.clipboard){
+    const items = rich ? {'text/html':new Blob([html],{type:'text/html'}), 'text/plain':new Blob([text],{type:'text/plain'})} : {'text/plain':new Blob([text],{type:'text/plain'})};
+    navigator.clipboard.write([new ClipboardItem(items)]).then(()=>toast('Copied'), ()=>toast('Copy blocked — select text and press Ctrl+C'));
+  } else toast(rich?'Copied rich text for Infloww':'Copied plain text');
+}
+async function pasteButton(){
+  try{
+    const items=await navigator.clipboard.read(); let html='', text='';
+    for(const it of items){ if(it.types.includes('text/html')) html=await (await it.getType('text/html')).text(); if(it.types.includes('text/plain')) text=await (await it.getType('text/plain')).text(); }
+    doPaste(html, text);
+  }catch(e){ ed.focus(); toast('Clipboard read blocked here — click the editor and press Ctrl+V'); }
+}
+
+/* ==========================================================================
+   PASTE INSPECTOR
+   ========================================================================== */
+function updateInspector(){
+  if(!lastPasteInfo) return;
+  const {html, learn, ins}=lastPasteInfo;
+  $('insRaw').textContent = html || '(no text/html on clipboard — plain text only)';
+  const cls=[...Object.entries(learn.size).map(([k,v])=>`size ${LEVEL_LABEL[k]} ← <code>${esc(v)}</code>`), ...Object.entries(learn.color).map(([k,v])=>`colour ${COLOR_LABEL[k]} ← <code>${esc(v)}</code>`)];
+  $('insClasses').innerHTML = cls.length ? cls.join('<br>') : 'No size/colour class names recognised. Inline styles (if any) were used instead.';
+  const runs=[]; let i=0; while(i<ins.length){ let j=i,t=''; while(j<ins.length && same(ins[j],ins[i])){ t+=ins[j].t; j++; } runs.push({...pick(ins[i]), t}); i=j; }
+  $('insParsed').innerHTML = runs.slice(0,60).map(r=>`<div><code>${LEVEL_LABEL[r.s]}${r.c!=='def'?' · '+COLOR_LABEL[r.c]:''}${r.b?' · B':''}${r.i?' · I':''}</code> ${esc(JSON.stringify(r.t).slice(0,80))}</div>`).join('') + (runs.length>60?`<div>… ${runs.length-60} more runs</div>`:'');
+}
+
+/* ==========================================================================
+   CALIBRATION DRAWER
+   ========================================================================== */
+function buildCalibration(){
+  const tag=(p,lv)=>S.measured[p]&&S.measured[p][lv] ? '<span class="tag m">measured</span>' : `<span class="tag u">assumed${p==='mobile'?' = Infloww':''}</span>`;
+  $('calBody').innerHTML = `
+    <h3>Font sizes (px)</h3>
+    <p class="note">Infloww sizes are measured from your TEST message. On the phone, Medium and Large were measured and matched Infloww exactly, so Smallest/Small/Largest are assumed to match too — a phone screenshot of the TEST message would confirm. PC (OnlyFans web) Medium = default and Large were measured from a chat screenshot; the other three are guesses.</p>
+    <table class="cal"><tr><th>Level</th><th>Infloww</th><th>PC</th><th>Mobile</th></tr>
+    ${LEVELS.map(lv=>`<tr><td>${LEVEL_LABEL[lv]}</td>
+      <td><input type="number" step="0.5" data-k="sizes.infloww.${lv}" value="${S.sizes.infloww[lv]}">${tag('infloww',lv)}</td>
+      <td><input type="number" step="0.5" data-k="sizes.pc.${lv}" value="${S.sizes.pc[lv]}">${tag('pc',lv)}</td>
+      <td><input type="number" step="0.5" data-k="sizes.mobile.${lv}" value="${S.sizes.mobile[lv]}">${tag('mobile',lv)}</td></tr>`).join('')}
+    </table>
+    <div class="row"><label>Base line height (px)</label><input type="number" step="0.5" data-k="lineHeight" value="${S.lineHeight}"><span class="tag m">measured</span></div>
+
+    <h3>Infloww wrap window</h3>
+    <div class="row"><label>Link to on-screen overlay</label><input type="checkbox" data-k="linkOverlay" ${S.linkOverlay?'checked':''}><span class="note">width = overlay wrap line − left guide (Ctrl+Shift+F10/F11 nudge it)</span></div>
+    <div class="row"><label>Text width (px)</label><input type="number" step="1" data-k="inflowwWidth" value="${S.inflowwWidth}" ${S.linkOverlay&&host?'disabled':''}><span class="note">overlay default 342; your Infloww screenshot fits 334–347</span></div>
+
+    <h3>PC (OnlyFans web chat)</h3>
+    <div class="row"><label>Guide left edge (1920-ref px)</label><input type="number" step="1" data-k="pcLeft" value="${S.pcLeft}"><span class="note">where the bubble text starts on screen (default ${PC_LEFT_REF_DEFAULT})</span></div>
+    <div class="row"><label>Text width (px)</label><input type="number" step="1" data-k="pcWidth" value="${S.pcWidth}"><span class="tag m">measured</span><span class="note">default ${PC_WIDTH_DEFAULT}; this is the bubble width minus padding, so it changes if you resize the browser or chat pane</span></div>
+    <div class="row"><label>Bubble padding (px)</label><input type="number" step="0.5" data-k="bubblePadPC" value="${S.bubblePadPC}"><span class="tag m">measured</span></div>
+
+    <h3>Phone</h3>
+    <div class="row"><label>Device</label><select data-k="device">${DEVICES.map(d=>`<option value="${d.id}" ${d.id===S.device?'selected':''}>${d.name}</option>`).join('')}</select></div>
+    <div class="row"><label>Custom width (pt)</label><input type="number" data-k="customW" value="${S.customW}"></div>
+    <div class="row"><label>Bubble max width (% of screen)</label><input type="number" step="0.5" data-k="bubblePct" value="${S.bubblePct}"><span class="tag m">measured on 402</span></div>
+    <div class="row"><label>Bubble padding (px)</label><input type="number" step="0.5" data-k="bubblePad" value="${S.bubblePad}"><span class="tag m">measured</span></div>
+    <div class="row"><label>Resulting text width</label><b>${mobileTextWidth().toFixed(1)} px</b></div>
+
+    <h3>Copy for Infloww</h3>
+    <div class="row"><label>Line breaks as</label><select data-k="exportBreaks"><option value="br" ${S.exportBreaks==='br'?'selected':''}>&lt;br&gt;</option><option value="p" ${S.exportBreaks==='p'?'selected':''}>&lt;p&gt; per line</option></select></div>
+    <div class="row"><label>Include inline styles</label><input type="checkbox" data-k="exportInlineStyles" ${S.exportInlineStyles?'checked':''}></div>
+    <div class="row"><label>Learned class names</label><span class="note">${Object.keys(S.learned.size).length+Object.keys(S.learned.color).length ? [...Object.entries(S.learned.size),...Object.entries(S.learned.color)].map(([k,v])=>`${k}: <code>${esc(v)}</code>`).join(', ') : 'none yet — paste from Infloww to learn them'}</span> <button id="forgetLearned">Forget</button></div>
+  `;
+  $('calBody').querySelectorAll('[data-k]').forEach(inp=>{
+    inp.addEventListener('change', ()=>{
+      const path=inp.dataset.k.split('.'); let o=S; for(let k=0;k<path.length-1;k++) o=o[path[k]];
+      const last=path[path.length-1];
+      o[last] = inp.type==='checkbox' ? inp.checked : (inp.type==='number' ? parseFloat(inp.value) : inp.value);
+      if(inp.dataset.k==='linkOverlay') syncInflowwFromHost();
+      applyPaneVars(); refresh(); buildCalibration(); saveSettingsSoon();
+    });
+  });
+  $('forgetLearned').onclick=()=>{ S.learned={size:{},color:{}}; buildCalibration(); saveSettingsSoon(); };
+}
+
+/* ==========================================================================
+   HOST BRIDGE (localhost server from wrap_renderer.py). Degrades gracefully when opened as a plain file.
+   ========================================================================== */
+function pushRatioToHost(){ if(host) host.set_mobile_ratio(mobileTextWidth()/S.inflowwWidth).catch(()=>{}); }
+function pushPcToHost(){ if(host) host.set_pc(S.pcLeft, S.pcWidth).catch(()=>{}); }
+function syncInflowwFromHost(){
+  if(host && hostState && S.linkOverlay) S.inflowwWidth = hostState.wrapRef - hostState.leftRef;
+}
+window.hostState = function(st){   // called by Python on hotkey/tray changes
+  hostState = st;
+  $('gInf').classList.toggle('on', !!st.infloww); $('gPC').classList.toggle('on', !!st.pc); $('gMob').classList.toggle('on', !!st.mobile);
+  const msgs=[]; if(!('pc' in st)) msgs.push('An older copy of the app is still running, so PC guides will not work. Quit it from the tray / menu bar, then reopen.');
+  if(st.hotkeyErrors && st.hotkeyErrors.length) msgs.push('Hotkeys in use elsewhere: '+st.hotkeyErrors.join(', ')+' (close wrap_overlay.exe?)');
+  $('hostNote').textContent = msgs.join(' '); $('hostNote').className = msgs.length?'err':'';
+  const before=S.inflowwWidth; syncInflowwFromHost();
+  if(before!==S.inflowwWidth){ applyPaneVars(); refresh(); if($('calDrawer').classList.contains('open')) buildCalibration(); }
+};
+let _saveT=0;
+function saveSettingsSoon(){ clearTimeout(_saveT); _saveT=setTimeout(saveSettings, 500); }
+function saveSettings(){
+  S.draft = chars;
+  const json=JSON.stringify(S);
+  if(host) host.save_settings(json).catch(()=>{});
+  else { try{ localStorage.setItem('wrapRenderer', json); }catch(e){} }
+}
+async function loadSettings(){
+  let raw=null;
+  if(host){ try{ raw=await host.load_settings(); }catch(e){} }
+  else { try{ raw=localStorage.getItem('wrapRenderer'); }catch(e){} }
+  if(raw){ try{ S=deepMerge(clone(DEFAULTS), JSON.parse(raw)); S.measured=clone(DEFAULTS.measured); }catch(e){} }
+  if(Array.isArray(S.draft) && S.draft.length){ chars=S.draft.filter(c=>c && typeof c.t==='string').map(c=>({t:c.t,...pick(c)})); }
+}
+function initHostButtons(){
+  const noHost = ()=>toast('On-screen guides need the desktop app — double-click Start Wrap Renderer');
+  $('gInf').onclick=()=> host ? host.toggle('infloww').then(window.hostState) : noHost();
+  $('gPC').onclick=()=> host ? host.toggle('pc').then(window.hostState) : noHost();
+  $('gMob').onclick=()=> host ? host.toggle('mobile').then(window.hostState) : noHost();
+  if(!host){ $('hostNote').textContent='File mode — on-screen guides, tray and hotkeys need Start Wrap Renderer.'; }
+}
+
+/* ==========================================================================
+   SAMPLE
+   ========================================================================== */
+function loadSample(){
+  syncFromDom(); pushHistory();
+  const H={s:'lg',c:'blue',b:true,i:false}, N=plainStyle(), B={s:'lg',c:'blue',b:false,i:false};
+  const parts=[
+    [H,'This weekend I tried something NEW 😳'],[N,'\n(small note here, there is more inside this one)\n\nI\'ll keep it short and let the set do the talking.\n\n'],
+    [N,'-◈ '],[B,'the first headline line goes here'],[N,'◈-\n                         ---|---\n         -◈ '],
+    [B,'second headline here'],[N,'◈-\n                         ---|---\n   -◈ '],[B,'third and final headline :)'],[N,'◈-\n\n'],
+    [{s:'md',c:'grey',b:false,i:true},'ok it\'s not like me but yes, tonight only!'],
+  ];
+  chars=[]; for(const [st,t] of parts) chars.push(...textToChars(t,st));
+  renderEditor(); refresh();
+}
+
+/* ==========================================================================
+   BOOT
+   ========================================================================== */
+function bindUi(){
+  buildToolbar();
+  $('btnCopy').onclick=()=>copyAll(true);
+  $('btnCopyPlain').onclick=()=>copyAll(false);
+  $('btnPaste').onclick=pasteButton;
+  $('btnClear').onclick=()=>{ syncFromDom(); pushHistory(); chars=[]; renderEditor(); refresh(); ed.focus(); };
+  $('btnSample').onclick=loadSample;
+  $('pgInf').onclick=()=>{ S.previewGuides.infloww=!S.previewGuides.infloww; applyPaneVars(); saveSettingsSoon(); };
+  $('pgPC').onclick=()=>{ S.previewGuides.pc=!S.previewGuides.pc; applyPaneVars(); saveSettingsSoon(); };
+  $('pgMob').onclick=()=>{ S.previewGuides.mobile=!S.previewGuides.mobile; applyPaneVars(); saveSettingsSoon(); };
+  for(const p of PANES) $(p.btn).onclick=()=>{ S.panes[p.key]=!S.panes[p.key]; applyPaneVars(); refresh(); };
+  $('mobOS').onclick=()=>{ if(S.device==='android') S.device=S.lastIphone||'ip16pro'; else { S.lastIphone=S.device; S.device='android'; } applyPaneVars(); refresh(); saveSettingsSoon(); if($('calDrawer').classList.contains('open')) buildCalibration(); };
+  $('mobTheme').onclick=()=>{ S.mobileTheme = S.mobileTheme==='light'?'dark':'light'; applyPaneVars(); saveSettingsSoon(); };
+  $('btnCal').onclick=()=>{ buildCalibration(); $('calDrawer').classList.add('open'); };
+  $('btnInspect').onclick=()=>{ $('insDrawer').classList.add('open'); };
+  $('calReset').onclick=()=>{ const keep={learned:S.learned, draft:S.draft, panes:S.panes}; S=clone(DEFAULTS); Object.assign(S,keep); syncInflowwFromHost(); applyPaneVars(); refresh(); buildCalibration(); saveSettingsSoon(); };
+  document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>b.closest('.drawer').classList.remove('open'));
+  document.addEventListener('keydown', e=>{
+    if(e.altKey && e.key==='1'){ e.preventDefault(); $('pgInf').click(); }
+    if(e.altKey && e.key==='3'){ e.preventDefault(); $('pgPC').click(); }
+    if(e.altKey && e.key==='2'){ e.preventDefault(); $('pgMob').click(); }
+    if(e.key==='Escape') document.querySelectorAll('.drawer.open').forEach(d=>d.classList.remove('open'));
+  });
+}
+// Host = wrap_renderer.py's localhost server. Same method names everywhere host.* is used.
+function makeHttpHost(token){
+  const call=(path, body)=>fetch('/api/'+path, {method: body===undefined?'GET':'POST', cache:'no-store',
+      headers:{'X-Token':token,'Content-Type':'application/json'}, body: body===undefined?undefined:JSON.stringify(body)})
+    .then(r=>{ if(!r.ok) throw new Error(r.status); return r.json(); });
+  return {
+    get_state: ()=>call('state'),
+    toggle: (name)=>call('toggle',{name}),
+    set_mobile_ratio: (ratio)=>call('ratio',{ratio}),
+    set_pc: (left,width)=>call('pc',{left,width}),
+    nudge: (d)=>call('nudge',{d}),
+    reset_wrap: ()=>call('reset',{}),
+    save_settings: (text)=>call('settings',{text}),
+    load_settings: ()=>call('settings').then(x=>x.text),
+  };
+}
+let _lastStateJson='', _hostDown=false;
+function pollHost(){            // picks up hotkey/tray changes (Ctrl+Shift+F9/F7/F10/F11)
+  host.get_state().then(st=>{
+    if(_hostDown){ _hostDown=false; $('hostNote').textContent=''; $('hostNote').className=''; }
+    const j=JSON.stringify(st); if(j!==_lastStateJson){ _lastStateJson=j; window.hostState(st); }
+  }).catch(()=>{ _hostDown=true; $('hostNote').textContent='Desktop app not running — on-screen guides unavailable (use Start Wrap Renderer).'; $('hostNote').className='err'; });
+}
+let _booted=false;
+async function boot(){
+  if(_booted) return; _booted=true;
+  const token=new URLSearchParams(location.search).get('t');
+  if(token && location.protocol.startsWith('http')){ host=makeHttpHost(token); history.replaceState(null,'',location.pathname+'?t='+token); }
+  bindUi(); initHostButtons();
+  await loadSettings();
+  if(host){
+    try{ window.hostState(await host.get_state()); }catch(e){}
+    setInterval(pollHost, 400);
+    window.addEventListener('pagehide', ()=>{ try{ navigator.sendBeacon('/api/closed?t='+encodeURIComponent(token)); }catch(e){} });
+  }
+  try{ await document.fonts.load('400 16px Roboto'); await document.fonts.load('700 16px Roboto'); await document.fonts.load('italic 400 16px Roboto'); }catch(e){}
+  applyPaneVars(); renderEditor(); refresh();
+}
+window.addEventListener('load', boot);
+</script>
+</body>
+</html>
