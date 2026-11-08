@@ -24,7 +24,7 @@ Use this before replacing or hooking into any piece. Every function lists who ca
 | Constant | Where | Also referenced by |
 |---|---|---|
 | Overlay left 615 / wrap 957 / top 720 / bottom 950 (1920×1080 ref) | `GUIDE_*_REF` in `wr_common.py` | `OVERLAY_LEFT_REF`, `OVERLAY_WRAP_DEFAULT_REF` in `renderer.html` (default Infloww width = 342); `state()["leftRef"]` |
-| PC left 1061 / width 390 / top 150 / bottom 920 (1920×1080 ref; OnlyFans web chat bubble). Width is absolute, not derived from the Infloww wrap | `GUIDE_PC_LEFT_REF`, `GUIDE_PC_WIDTH_DEFAULT`, `GUIDE_PC_TOP_REF`, `GUIDE_PC_BOTTOM_REF` in `wr_common.py` | `PC_LEFT_REF_DEFAULT`, `PC_WIDTH_DEFAULT` in `renderer.html` (`S.pcLeft`/`S.pcWidth`, pushed by `pushPcToHost()`) |
+| PC guide: same left edge and vertical span as the Infloww guides; text width 390 (1920×1080 ref), absolute, not derived from the Infloww wrap. `pcLeft`/`GUIDE_PC_LEFT_REF` are now unused by the overlay | `GUIDE_PC_WIDTH_DEFAULT` in `wrap_renderer.py` / `wr_common.py` | `PC_WIDTH_DEFAULT` in `renderer.html` (`S.pcWidth`, pushed by `pushPcToHost()`) |
 | Font sizes per level, per platform | `DEFAULTS.sizes` in `renderer.html` | `applyPaneVars()` (CSS vars `--xs…--xl`), `nearestLevel()` (paste mapping uses the **infloww** table), `resolveStyle()` (`<font size>`), `exportHTML()` (inline `font-size`) |
 | Measured/placeholder flags | `DEFAULTS.measured` | `buildCalibration()` tags only. They're always reset from DEFAULTS on load |
 | Colours | CSS vars on `#infTxt`, `#phone.light/.dark`, `#ed`; `PALETTE.infloww` | `exportHTML()` uses `PALETTE.infloww`; toolbar swatches use `PALETTE.infloww` |

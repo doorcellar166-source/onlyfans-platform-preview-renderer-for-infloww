@@ -297,9 +297,9 @@ class Overlay:
                 bar(left, top, bottom, self.cyan)
             bar(mwrap, top, bottom, self.cyan)
             dashed((left + mwrap) / 2, self.cyan)
-        if pc:  # own left edge + absolute width, own vertical span (chat pane, not the composer)
-            pl, pr = self._x(pcl), self._x(pcl + pcw)
-            pt, pb = self._y(GUIDE_PC_TOP_REF), self._y(GUIDE_PC_BOTTOM_REF)
+        if pc:  # starts at the Infloww text edge, PC text width
+            pl, pr = left, self._x(GUIDE_LEFT_REF + pcw)  # same left edge as the Infloww text; width is absolute
+            pt, pb = top, bottom  # same vertical span as the Infloww guides
             bar(pl, pt, pb, self.green)
             bar(pr, pt, pb, self.green)
             y = pt

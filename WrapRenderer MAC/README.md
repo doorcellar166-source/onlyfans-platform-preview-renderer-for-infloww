@@ -15,7 +15,7 @@ Launching again while it's running just brings the window back. The window opens
 | Keys | Action |
 |---|---|
 | Ctrl+Shift+F9 | Infloww guides on/off (red; same as the old overlay) |
-| Ctrl+Shift+F12 | PC guides on/off (green; OnlyFans web chat bubble, left edge 1061 / width 390, both editable in the app) |
+| Ctrl+Shift+F12 | PC guides on/off (green; starts at the Infloww text edge and wraps 390px later, width editable in Calibration) |
 | Ctrl+Shift+F7 | Mobile guides on/off (cyan line = where the iPhone wraps) |
 | Ctrl+Shift+F10 / F11 | Move the wrap line 1px left/right (saved; the Infloww preview follows) |
 | Ctrl+Shift+F6 | Show the renderer window |
