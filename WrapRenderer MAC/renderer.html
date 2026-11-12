@@ -388,7 +388,10 @@ const SIZE_WORDS = [
   ['md',['medium','md','m','default','normal','regular','base']],
 ];
 // Reads a class token like "m-editor-fs__lg" / "text-blue". Returns {lv,col}.
+// Infloww's own size classes, matched exactly first: their names don't follow plain English (__s > __sm, __lg > __l).
+const INFLOWW_FS = {'m-editor-fs__sm':'xs','m-editor-fs__s':'sm','m-editor-fs__default':'md','m-editor-fs__l':'lg','m-editor-fs__lg':'xl'};
 function classToken(tok){
+  const exact=INFLOWW_FS[tok.toLowerCase()]; if(exact) return {lv:exact, col:null};
   const parts=tok.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
   let col=null, lv=null;
   if(parts.some(p=>/^gr[ae]y/.test(p))) col='grey'; else if(parts.some(p=>/^blue/.test(p))) col='blue';
