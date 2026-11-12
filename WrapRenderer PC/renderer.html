@@ -48,6 +48,7 @@ kbd{font:11px/1 ui-monospace,Consolas,monospace;background:#0A0F13;border:1px so
 .grp button{border:0;border-radius:0;border-right:1px solid var(--line);padding:5px 9px;background:var(--panel2)}
 .grp button:last-child{border-right:0}
 .grp button.on{background:#17344A;color:#CFEAFB}
+#tbFont{background:var(--panel2);border:1px solid var(--line);border-radius:7px;padding:4px 6px;max-width:210px}
 #edWrap{flex:1;overflow:auto;padding:14px 16px;background:#1C2832}
 #ed{outline:none;min-height:100%;white-space:pre-wrap;overflow-wrap:break-word;font-family:var(--font);font-size:16px;line-height:24px;color:#F6F7F8;caret-color:#fff;
   --xs:12px;--sm:14px;--md:16px;--lg:24px;--xl:32px;--def:#F6F7F8;--grey:#8A96A3;--blue:#45ADED}
@@ -174,6 +175,7 @@ pre.raw{background:#0A0F13;border:1px solid var(--line);border-radius:6px;paddin
       <button id="btnClear">Clear</button>
     </header>
     <div id="tb">
+      <select id="tbFont" title="Unicode font: swaps the letters themselves (𝒊𝒏𝒔𝒊𝒅𝒆). Typing matches the font of the nearest letter."></select>
       <div class="grp" id="tbSize"></div>
       <div class="grp" id="tbColor"></div>
       <div class="grp">
@@ -593,6 +595,18 @@ function applyFormat(key, val){
 ed.addEventListener('beforeinput', e=>{
   const t=e.inputType;
   if(t==='insertParagraph' || t==='insertLineBreak'){ e.preventDefault(); modelInsertText('\n'); return; }
+  if(t==='insertText' && e.data && !e.isComposing){
+    syncFromDom(); const sel=getSel();
+    if(sel){
+      const picked = !!fontPick && sel[0]===sel[1] && fontPick.at===sel[0], f=typingFont(sel);
+      if(f!=='normal' || picked){
+        e.preventDefault(); const keep=picked ? fontPick.id : null;
+        modelInsertText(toFont(e.data, f));
+        if(keep){ const s=getSel(); if(s) fontPick={id:keep, at:s[0]}; }
+        return;
+      }
+    }
+  }
   if(t==='insertText' && pending){ e.preventDefault(); modelInsertText(e.data||''); return; }
   if(t==='historyUndo'){ e.preventDefault(); undo(); return; }
   if(t==='historyRedo'){ e.preventDefault(); redo(); return; }
@@ -633,7 +647,9 @@ function exportSelection(e, cut){
 ed.addEventListener('copy', e=>exportSelection(e,false));
 ed.addEventListener('cut', e=>exportSelection(e,true));
 document.addEventListener('selectionchange', ()=>{
-  if(pending){ const s=getSel(); if(!s || s[0]!==pendingAt || s[1]!==pendingAt) pending=null; }
+  const cur=getSel(); if(cur) lastEdSel=cur;
+  if(pending){ const s=cur; if(!s || s[0]!==pendingAt || s[1]!==pendingAt) pending=null; }
+  if(fontPick && cur && (cur[0]!==fontPick.at || cur[1]!==fontPick.at)) fontPick=null;
   updateToolbar();
 });
 
@@ -665,6 +681,86 @@ function doPaste(html, text){
 }
 
 /* ==========================================================================
+   UNICODE ("IG") FONTS
+   These swap letters for styled Unicode look-alikes (𝒊𝒏𝒔𝒊𝒅𝒆), so unlike B/I/size/colour they change the text itself
+   and survive any paste. Typing takes the font of the nearest letter before the caret (after it, at a line start),
+   like Word; picking a font at a collapsed caret overrides that until the caret moves elsewhere.
+   ========================================================================== */
+const AZ='ABCDEFGHIJKLMNOPQRSTUVWXYZ', az=AZ.toLowerCase(), DIG='0123456789';
+function uFont(id, name, U, L, D, ex={}){
+  const m={};
+  for(let k=0;k<26;k++){ if(U!=null) m[AZ[k]]=ex[AZ[k]] ?? U+k; if(L!=null) m[az[k]]=ex[az[k]] ?? L+k; }
+  if(D!=null) for(let k=0;k<10;k++) m[DIG[k]] = typeof D==='function' ? D(k) : D+k;
+  return {id, name, m};
+}
+const UFONTS=[
+  {id:'normal', name:'Normal font', m:{}},
+  uFont('serifB',  'Serif bold',        0x1D400,0x1D41A,0x1D7CE),
+  uFont('serifI',  'Serif italic',      0x1D434,0x1D44E,null,{h:0x210E}),
+  uFont('serifBI', 'Serif bold italic', 0x1D468,0x1D482),
+  uFont('sans',    'Sans',              0x1D5A0,0x1D5BA,0x1D7E2),
+  uFont('sansB',   'Sans bold',         0x1D5D4,0x1D5EE,0x1D7EC),
+  uFont('sansI',   'Sans italic',       0x1D608,0x1D622),
+  uFont('sansBI',  'Sans bold italic',  0x1D63C,0x1D656),
+  uFont('script',  'Script',            0x1D49C,0x1D4B6,null,{B:0x212C,E:0x2130,F:0x2131,H:0x210B,I:0x2110,L:0x2112,M:0x2133,R:0x211B,e:0x212F,g:0x210A,o:0x2134}),
+  uFont('scriptB', 'Script bold',       0x1D4D0,0x1D4EA),
+  uFont('frak',    'Gothic',            0x1D504,0x1D51E,null,{C:0x212D,H:0x210C,I:0x2111,R:0x211C,Z:0x2128}),
+  uFont('frakB',   'Gothic bold',       0x1D56C,0x1D586),
+  uFont('double',  'Double struck',     0x1D538,0x1D552,0x1D7D8,{C:0x2102,H:0x210D,N:0x2115,P:0x2119,Q:0x211A,R:0x211D,Z:0x2124}),
+  uFont('mono',    'Monospace',         0x1D670,0x1D68A,0x1D7F6),
+  uFont('wide',    'Wide',              0xFF21,0xFF41,0xFF10),
+  {id:'smallcaps', name:'Small caps', m:Object.fromEntries([...az].flatMap((c,k)=>{ const g='ᴀʙᴄᴅᴇꜰɢʜɪᴊᴋʟᴍɴᴏᴘǫʀꜱᴛᴜᴠᴡxʏᴢ'.codePointAt(k); return [[c,g],[AZ[k],g]]; }))},
+  uFont('circle',  'Circled',           0x24B6,0x24D0,k=>k?0x2460+k-1:0x24EA),
+  uFont('circleF', 'Circled filled',    0x1F150,0x1F150,k=>k?0x2776+k-1:0x24FF),
+  uFont('square',  'Squared',           0x1F130,0x1F130),
+  uFont('squareF', 'Squared filled',    0x1F170,0x1F170),
+];
+const FONT_BY_ID=Object.fromEntries(UFONTS.map(f=>[f.id,f]));
+const FONT_REV=new Map();  // styled code point -> {f: font id, b: plain character}
+for(const f of UFONTS) for(const [b,cp] of Object.entries(f.m)) if(cp>127 && !FONT_REV.has(cp)) FONT_REV.set(cp, {f:f.id, b});
+function baseOf(ch){ const r=FONT_REV.get(ch.codePointAt(0)); return r ? r.b : ch; }
+// The font a character shows, or null for characters that say nothing about the font (spaces, digits, emoji, symbols).
+function fontOfCh(ch){ const r=FONT_REV.get(ch.codePointAt(0)); return r ? r.f : (/^[A-Za-z]$/.test(ch) ? 'normal' : null); }
+function toFont(text, id){
+  const f=FONT_BY_ID[id];
+  return Array.from(text, ch=>{ const b=baseOf(ch); const cp=f && f.m[b]; return cp==null ? b : String.fromCodePoint(cp); }).join('');
+}
+function fontNear(idx){
+  const text=plainText(chars);
+  const ls=idx>0 ? text.lastIndexOf('\n', idx-1)+1 : 0; let le=text.indexOf('\n', idx); if(le<0) le=text.length;
+  for(const ch of Array.from(text.slice(ls, idx)).reverse()){ const f=fontOfCh(ch); if(f) return f; }
+  for(const ch of Array.from(text.slice(idx, le))){ const f=fontOfCh(ch); if(f) return f; }
+  return 'normal';
+}
+let fontPick=null;   // {id, at}: font chosen from the menu at a collapsed caret
+let lastEdSel=null;  // last selection inside the editor (the menu takes focus away from it)
+function caretFont(idx){ return fontPick && fontPick.at===idx ? fontPick.id : fontNear(idx); }
+// Font of a selection: its id, '' when mixed, null when it has no letters.
+function selFont(a, b){
+  const set=new Set(); for(const ch of Array.from(plainText(chars.slice(a,b)))){ const f=fontOfCh(ch); if(f) set.add(f); }
+  return set.size===1 ? [...set][0] : (set.size ? '' : null);
+}
+function typingFont(sel){ return sel[0]===sel[1] ? caretFont(sel[0]) : (selFont(sel[0],sel[1]) || fontNear(sel[0])); }
+function applyFont(id){
+  syncFromDom();
+  let [a,b]=lastEdSel || [chars.length, chars.length]; a=Math.min(a,chars.length); b=Math.min(b,chars.length);
+  ed.focus();
+  if(a===b){ setSel(a); fontPick={id, at:a}; updateToolbar(); return; }
+  const isLow=k=>{ const c=chars[k] ? chars[k].t.charCodeAt(0) : 0; return c>=0xDC00 && c<=0xDFFF; };
+  if(isLow(a)) a--; if(isLow(b)) b++;   // never split a surrogate pair
+  pushHistory();
+  const out=[];
+  for(let k=a;k<b;){
+    const src=chars[k], cp=plainText(chars.slice(k,k+2)).codePointAt(0), n=cp>0xFFFF?2:1;
+    const conv = src.t==='\n' ? '\n' : toFont(String.fromCodePoint(cp), id);
+    for(let q=0;q<conv.length;q++) out.push({...src, t:conv[q]});
+    k+=n;
+  }
+  chars.splice(a, b-a, ...out);
+  renderEditor(); setSel(a, a+out.length); refresh();
+}
+
+/* ==========================================================================
    TOOLBAR
    ========================================================================== */
 function buildToolbar(){
@@ -673,6 +769,8 @@ function buildToolbar(){
   document.querySelectorAll('#tb button').forEach(b=>b.addEventListener('mousedown', e=>e.preventDefault()));
   $('tbSize').addEventListener('click', e=>{ const b=e.target.closest('button'); if(b) applyFormat('s', b.dataset.s); });
   $('tbColor').addEventListener('click', e=>{ const b=e.target.closest('button'); if(b) applyFormat('c', b.dataset.c); });
+  $('tbFont').innerHTML = '<option value="" disabled hidden>Mixed fonts</option>' + UFONTS.map(f=>`<option value="${f.id}">${esc(toFont(f.name, f.id))}</option>`).join('');
+  $('tbFont').addEventListener('change', e=>{ if(e.target.value) applyFont(e.target.value); });
   $('tbB').onclick=()=>applyFormat('b'); $('tbI').onclick=()=>applyFormat('i'); $('tbX').onclick=()=>applyFormat('clear');
 }
 function updateToolbar(){
@@ -685,6 +783,8 @@ function updateToolbar(){
   document.querySelectorAll('#tbColor button').forEach(b=>b.classList.toggle('on', !!st && !mixed.c && st.c===b.dataset.c));
   $('tbB').classList.toggle('on', !!st && !mixed.b && st.b);
   $('tbI').classList.toggle('on', !!st && !mixed.i && st.i);
+  const fs=$('tbFont');
+  if(sel && document.activeElement!==fs) fs.value = sel[0]===sel[1] ? caretFont(sel[0]) : (selFont(sel[0],sel[1]) ?? caretFont(sel[0]));
 }
 
 /* ==========================================================================
